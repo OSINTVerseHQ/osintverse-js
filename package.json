@@ -5,17 +5,39 @@
   "license": "MIT",
   "author": "OSINTverse <hi@osintverse.com>",
   "homepage": "https://osintverse.com/docs",
-  "repository": { "type": "git", "url": "git+https://github.com/OSINTVerseHQ/osintverse-js.git" },
-  "keywords": ["osint", "investigations", "breach", "whois", "api", "cli", "agents"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OSINTVerseHQ/osintverse-js.git"
+  },
+  "keywords": [
+    "osint",
+    "investigations",
+    "breach",
+    "whois",
+    "api",
+    "cli",
+    "agents"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
-  "bin": { "osintverse": "./dist/bin.js" },
-  "files": ["dist", "README.md", "LICENSE"],
-  "engines": { "node": ">=18" },
+  "bin": {
+    "osintverse": "dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "bun test",
