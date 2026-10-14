@@ -267,13 +267,13 @@ export async function run(
   const out = new Output(Boolean(flags.json))
   const [command, ...args] = positional
 
-  if (!command || flags.help || command === "help") {
-    process.stdout.write(`${HELP}\n`)
-    return command ? EXIT.ok : EXIT.usage
-  }
   if (command === "version" || flags.version) {
     process.stdout.write(`${VERSION}\n`)
     return EXIT.ok
+  }
+  if (!command || flags.help || command === "help") {
+    process.stdout.write(`${HELP}\n`)
+    return command ? EXIT.ok : EXIT.usage
   }
 
   if (command === "login") return login(flags, out, env.fetch ?? globalThis.fetch, env.sleepMs)

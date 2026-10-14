@@ -2,7 +2,7 @@ import { APIError, OSINTverseError, SearchNotCompletedError, toApiError, WaitTim
 import { TERMINAL_STATUSES, type BulkSearch, type InputType, type Provider, type Quote, type Search } from "./types.js"
 
 export const DEFAULT_BASE_URL = "https://apiv1.osintverse.com"
-export const VERSION = "0.2.0"
+export const VERSION = "0.2.1"
 const API_KEY_ENV = "OSINTVERSE_API_KEY"
 
 export type ClientOptions = {
