@@ -1,6 +1,6 @@
 {
   "name": "osintverse",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OSINTverse API client and CLI: paid-per-lookup OSINT searches across breach, people, domain, crypto, and image sources.",
   "license": "MIT",
   "author": "OSINTverse <hi@osintverse.com>",

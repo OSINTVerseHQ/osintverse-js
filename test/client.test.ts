@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import { EXIT, parseArgs, run } from "../src/cli"
 import { APIError, OSINTverse } from "../src/index"
@@ -172,6 +175,58 @@ describe("cli", () => {
     expect(code).toBe(EXIT.ok)
     expect(calls.map((call) => new URL(call.url).pathname)).toEqual(["/v1/search/quote", "/v1/search"])
     expect(JSON.parse(io.text()).id).toBe("s1")
+  })
+
+  test("login polls the device flow and saves the key", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ov-cli-"))
+    process.env.OSINTVERSE_CONFIG_DIR = dir
+    const { calls, fetch } = fakeFetch([
+      {
+        body: {
+          device_code: "dc",
+          user_code: "BCDF-GHJK",
+          verification_uri: "https://osintverse.com/device",
+          verification_uri_complete: "https://osintverse.com/device?code=BCDF-GHJK",
+          expires_in: 600,
+          interval: 5,
+        },
+      },
+      { status: 400, body: { error: "authorization_pending" } },
+      { status: 400, body: { error: "slow_down" } },
+      { body: { api_key: "ov_new", key_id: "k1", key_name: "CLI: host", workspace: { kind: "personal", name: "Personal wallet" } } },
+    ])
+    const io = capture()
+    const code = await run(["login", "--json"], { fetch, sleepMs: 1 })
+    io.restore()
+    expect(code).toBe(EXIT.ok)
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/api/cli/device/code",
+      "/api/cli/device/token",
+      "/api/cli/device/token",
+      "/api/cli/device/token",
+    ])
+    const lines = io.text().trim().split("\n").map((line) => JSON.parse(line))
+    expect(lines[0]).toMatchObject({ status: "awaiting_approval", user_code: "BCDF-GHJK" })
+    expect(lines[1]).toMatchObject({ status: "logged_in", key_name: "CLI: host" })
+    expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")).api_key).toBe("ov_new")
+    delete process.env.OSINTVERSE_CONFIG_DIR
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("login stops when the person denies", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ov-cli-"))
+    process.env.OSINTVERSE_CONFIG_DIR = dir
+    const { fetch } = fakeFetch([
+      { body: { device_code: "dc", user_code: "BCDF-GHJK", verification_uri: "u", verification_uri_complete: "u", expires_in: 600, interval: 5 } },
+      { status: 400, body: { error: "access_denied" } },
+    ])
+    const io = capture()
+    const code = await run(["login", "--json"], { fetch, sleepMs: 1 })
+    io.restore()
+    expect(code).toBe(EXIT.error)
+    expect(existsSync(join(dir, "config.json"))).toBe(false)
+    delete process.env.OSINTVERSE_CONFIG_DIR
+    rmSync(dir, { recursive: true, force: true })
   })
 
   test("bulk quotes every provider for the number of queries", async () => {

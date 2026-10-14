@@ -4,9 +4,12 @@
  * - paid commands quote first and never spend without --yes (or an interactive yes)
  * - exit codes are stable (see EXIT)
  */
+import { spawn } from "node:child_process"
+import { hostname } from "node:os"
 import { createInterface } from "node:readline/promises"
 
 import { OSINTverse, VERSION } from "./client.js"
+import { configPath, deleteCredentials, readCredentials, writeCredentials } from "./config.js"
 import { APIError, OSINTverseError, SearchNotCompletedError, WaitTimeoutError } from "./errors.js"
 import type { Quote, Search } from "./types.js"
 
@@ -22,6 +25,9 @@ export const EXIT = {
 const HELP = `osintverse ${VERSION} - OSINT lookups from the terminal (https://osintverse.com)
 
 Usage:
+  osintverse login [--no-browser]       Sign in from the browser; saves a new API key
+  osintverse logout                     Forget the saved key (revoke it at /dashboard/api)
+  osintverse whoami                     Show which key and wallet the CLI uses
   osintverse providers [--input-type <type>]
   osintverse quote <provider> <input_type> [--premium] [--count <n>]
   osintverse search <provider> <input_type> <query> [--premium] [--max-cost <usd>] [--yes] [--no-wait]
@@ -35,8 +41,9 @@ Options:
   --json             Print JSON only (for scripts and agents)
   --yes              Confirm a paid lookup without a prompt
   --max-cost <usd>   Refuse to run if the quote is above this amount
-  --api-key <key>    Overrides OSINTVERSE_API_KEY
+  --api-key <key>    Overrides OSINTVERSE_API_KEY and the saved key
   --base-url <url>   Overrides https://apiv1.osintverse.com
+  --site <url>       Overrides https://osintverse.com (login only)
 
 Paid commands (search, bulk, unlock, premium) spend your OSINTverse wallet. Without
 --yes in a non-interactive shell they print the quote and exit 3 without charging.
@@ -44,7 +51,9 @@ Paid commands (search, bulk, unlock, premium) spend your OSINTverse wallet. With
 Exit codes: 0 ok, 1 error, 2 usage, 3 needs confirmation, 4 insufficient balance,
 5 search failed or refunded.
 
-API key: create one at https://osintverse.com/dashboard/api and export OSINTVERSE_API_KEY.`
+API key: run "osintverse login", or create one at https://osintverse.com/dashboard/api
+and export OSINTVERSE_API_KEY. With --json, login prints one JSON line with the code to
+approve, then one with the result.`
 
 type Flags = Record<string, string | boolean>
 
@@ -58,7 +67,7 @@ export function parseArgs(argv: string[]) {
       continue
     }
     const [name, inline] = arg.slice(2).split("=", 2)
-    const takesValue = ["input-type", "count", "max-cost", "api-key", "base-url", "providers", "queries"].includes(name)
+    const takesValue = ["input-type", "count", "max-cost", "api-key", "base-url", "providers", "queries", "site"].includes(name)
     if (!takesValue) {
       flags[name] = true
     } else if (inline !== undefined) {
@@ -149,7 +158,104 @@ function describeSearch(search: Search) {
   return lines.join("\n")
 }
 
-export async function run(argv: string[], env: { client?: OSINTverse } = {}): Promise<number> {
+const DEFAULT_SITE = "https://osintverse.com"
+
+function openBrowser(url: string) {
+  const [cmd, args]: [string, string[]] =
+    process.platform === "win32"
+      ? ["cmd", ["/c", "start", "", url]]
+      : process.platform === "darwin"
+        ? ["open", [url]]
+        : ["xdg-open", [url]]
+  try {
+    spawn(cmd, args, { stdio: "ignore", detached: true }).on("error", () => {}).unref()
+  } catch {
+    // No browser on this machine; the URL is printed anyway.
+  }
+}
+
+type DeviceStart = {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  verification_uri_complete: string
+  expires_in: number
+  interval: number
+}
+
+/** RFC 8628 device flow against osintverse.com; the approved code is exchanged once for a new ov_ key. */
+export async function login(flags: Flags, out: Output, fetchImpl: typeof fetch, sleepMs = 1000): Promise<number> {
+  const site = (typeof flags.site === "string" ? flags.site : DEFAULT_SITE).replace(/\/+$/, "")
+  const post = (path: string, body: Record<string, string>) =>
+    fetchImpl(`${site}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": `osintverse-js/${VERSION}` },
+      body: new URLSearchParams(body).toString(),
+    })
+  const line = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`)
+  const fail = (code: string, message: string) => {
+    if (out.json) line({ status: "error", error: { code, message } })
+    else process.stderr.write(`${message}\n`)
+    return EXIT.error
+  }
+
+  const started = await post("/api/cli/device/code", { client_name: hostname() }).catch(() => null)
+  if (!started?.ok) return fail("login_failed", `Could not start sign-in${started ? ` (HTTP ${started.status})` : ""}. Try again in a minute.`)
+  const device = (await started.json()) as DeviceStart
+
+  if (out.json) {
+    line({
+      status: "awaiting_approval",
+      user_code: device.user_code,
+      verification_uri: device.verification_uri,
+      verification_uri_complete: device.verification_uri_complete,
+      expires_in: device.expires_in,
+    })
+  } else {
+    process.stderr.write(
+      `\nYour code: ${device.user_code}\n\nOpen ${device.verification_uri_complete}\nand approve it while signed in to OSINTverse. Waiting...\n`,
+    )
+    if (!flags["no-browser"] && process.stdout.isTTY) openBrowser(device.verification_uri_complete)
+  }
+
+  let interval = Math.max(device.interval, 1) * sleepMs
+  const deadline = Date.now() + device.expires_in * 1000
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, interval))
+    const polled = await post("/api/cli/device/token", { device_code: device.device_code }).catch(() => null)
+    if (!polled) continue
+    const body = (await polled.json().catch(() => ({}))) as Record<string, unknown>
+    if (polled.ok && typeof body.api_key === "string") {
+      const workspace = body.workspace as { kind: "personal" | "team"; name: string } | undefined
+      writeCredentials({
+        api_key: body.api_key,
+        key_id: typeof body.key_id === "string" ? body.key_id : undefined,
+        key_name: typeof body.key_name === "string" ? body.key_name : undefined,
+        workspace,
+        site_url: site,
+        created_at: new Date().toISOString(),
+      })
+      if (out.json) line({ status: "logged_in", key_name: body.key_name, workspace, config_path: configPath() })
+      else process.stderr.write(`Signed in. Key "${body.key_name}" bills ${workspace?.name ?? "your wallet"}. Saved to ${configPath()}\n`)
+      return EXIT.ok
+    }
+    const error = typeof body.error === "string" ? body.error : null
+    if (error === "authorization_pending") continue
+    if (error === "slow_down") {
+      interval += 5 * sleepMs
+      continue
+    }
+    if (error === "access_denied") return fail("access_denied", "Sign-in was denied.")
+    if (error === "expired_token") return fail("expired_token", "The code expired. Run login again.")
+    return fail(error ?? "login_failed", `Sign-in failed (${error ?? `HTTP ${polled.status}`}).`)
+  }
+  return fail("expired_token", "The code expired. Run login again.")
+}
+
+export async function run(
+  argv: string[],
+  env: { client?: OSINTverse; fetch?: typeof fetch; sleepMs?: number } = {},
+): Promise<number> {
   let parsed: ReturnType<typeof parseArgs>
   try {
     parsed = parseArgs(argv)
@@ -170,10 +276,45 @@ export async function run(argv: string[], env: { client?: OSINTverse } = {}): Pr
     return EXIT.ok
   }
 
+  if (command === "login") return login(flags, out, env.fetch ?? globalThis.fetch, env.sleepMs)
+  if (command === "logout") {
+    const removed = deleteCredentials()
+    out.result({ status: removed ? "logged_out" : "not_logged_in", config_path: configPath() }, () =>
+      removed
+        ? "Forgot the saved key. It still works until you revoke it at https://osintverse.com/dashboard/api."
+        : "No saved key.",
+    )
+    return EXIT.ok
+  }
+  if (command === "whoami") {
+    const saved = readCredentials()
+    const source =
+      typeof flags["api-key"] === "string" ? "flag" : process.env.OSINTVERSE_API_KEY ? "env" : saved ? "config" : null
+    out.result(
+      {
+        status: source ? "ok" : "not_logged_in",
+        key_source: source,
+        key_name: source === "config" ? (saved?.key_name ?? null) : null,
+        workspace: source === "config" ? (saved?.workspace ?? null) : null,
+        config_path: configPath(),
+      },
+      () =>
+        !source
+          ? "Not signed in. Run: osintverse login"
+          : source === "config"
+            ? `Using saved key "${saved?.key_name}" billing ${saved?.workspace?.name ?? "your wallet"}.`
+            : `Using the API key from ${source === "env" ? "OSINTVERSE_API_KEY" : "--api-key"}.`,
+    )
+    return source ? EXIT.ok : EXIT.error
+  }
+
   const client =
     env.client ??
     new OSINTverse({
-      apiKey: typeof flags["api-key"] === "string" ? flags["api-key"] : undefined,
+      apiKey:
+        (typeof flags["api-key"] === "string" ? flags["api-key"] : undefined) ??
+        process.env.OSINTVERSE_API_KEY ??
+        readCredentials()?.api_key,
       baseUrl: typeof flags["base-url"] === "string" ? flags["base-url"] : undefined,
     })
   const waitFor = !flags["no-wait"]

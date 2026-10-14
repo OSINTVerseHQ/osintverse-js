@@ -7,11 +7,19 @@ npm install osintverse        # library
 npx osintverse --help         # CLI, no install
 ```
 
-Create an API key at [osintverse.com/dashboard/api](https://osintverse.com/dashboard/api) and export it:
+Sign in once. The CLI shows a code, you approve it at osintverse.com/device, and a new API key is saved to your config folder (`%APPDATA%\osintverse` on Windows, `~/.config/osintverse` elsewhere):
+
+```bash
+npx osintverse login
+```
+
+Or create a key at [osintverse.com/dashboard/api](https://osintverse.com/dashboard/api) and export it (this wins over the saved key):
 
 ```bash
 export OSINTVERSE_API_KEY=ov_your_api_key
 ```
+
+`osintverse whoami` shows which key is in use; `osintverse logout` forgets the saved key (revoke it in the dashboard to disable it). For agents, `login --json` prints one line with the code to approve, then one with the result.
 
 ## CLI
 
