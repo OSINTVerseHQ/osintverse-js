@@ -242,3 +242,32 @@ describe("cli", () => {
     expect(JSON.parse(io.text()).total_cost_usd).toBe("2.60")
   })
 })
+
+describe("webhooks", () => {
+  // Published Standard Webhooks example.
+  const secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+  const body = '{"test": 2432232314}'
+  const headers = {
+    "Webhook-Id": "msg_p5jXN8AQM9LWM0D4loKWxJek",
+    "Webhook-Timestamp": "1614265330",
+    "Webhook-Signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=",
+  }
+
+  test("verifyWebhook accepts the signed event and rejects tampering or age", async () => {
+    const { verifyWebhook, WebhookVerificationError } = await import("../src/index")
+    expect(await verifyWebhook(secret, headers, body, { now: 1614265330 })).toEqual({ test: 2432232314 } as never)
+    expect(await verifyWebhook(secret, new Headers(headers), body, { now: 1614265330 })).toEqual({ test: 2432232314 } as never)
+    await expect(verifyWebhook(secret, headers, '{"test": 1}', { now: 1614265330 })).rejects.toBeInstanceOf(WebhookVerificationError)
+    await expect(verifyWebhook(secret, headers, body, { now: 1614265330 + 301 })).rejects.toBeInstanceOf(WebhookVerificationError)
+  })
+
+  test("callbackUrl is sent and webhookSecret reads the secret", async () => {
+    const created = { id: "s1", status: "completed", provider: "leakradar", input_type: "email", query: "a@b.co" }
+    const { calls, fetch } = fakeFetch([{ body: created }, { body: { secret } }])
+    const client = new OSINTverse({ apiKey: "ov_test", fetch })
+    await client.search.create({ provider: "leakradar", inputType: "email", query: "a@b.co", callbackUrl: "https://h.example.com/x" })
+    expect(JSON.parse(String(calls[0].init.body)).callback_url).toBe("https://h.example.com/x")
+    expect(await client.search.webhookSecret()).toBe(secret)
+    expect(calls[1].url).toEndWith("/v1/webhooks/secret")
+  })
+})

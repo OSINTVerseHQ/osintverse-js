@@ -3,4 +3,6 @@ export type { BulkSearchParams, ClientOptions, CreateSearchParams, WaitOptions }
 export { APIError, OSINTverseError, SearchNotCompletedError, WaitTimeoutError } from "./errors.js"
 export type { ApiErrorInfo } from "./errors.js"
 export { TERMINAL_STATUSES } from "./types.js"
+export { verifyWebhook, WebhookVerificationError } from "./webhooks.js"
+export type { VerifyWebhookOptions, WebhookEvent } from "./webhooks.js"
 export type { BulkSearch, InputType, Provider, Quote, Search, SearchStatus } from "./types.js"

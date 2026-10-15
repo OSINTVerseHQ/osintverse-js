@@ -61,6 +61,23 @@ if (quote.sufficient_balance) {
 - Errors are `APIError` with `status`, `code` (`unauthorized`, `insufficient_balance`, `not_found`, `conflict`, `invalid_request`, ...), and `hint`.
 - `wait` polls every 2 seconds until `completed`, `failed`, or `refunded`.
 
+## Webhooks
+
+Pass `callbackUrl` to `search.create` or `search.bulk` and the API POSTs a signed event when each search completes, fails, or is refunded. The event has ids, status, and cost, never the query or results.
+
+```ts
+import { OSINTverse, verifyWebhook } from "osintverse"
+
+const client = new OSINTverse()
+const secret = await client.search.webhookSecret() // once; one per wallet
+
+// In your handler, with the raw body string:
+const event = await verifyWebhook(secret, request.headers, rawBody) // throws WebhookVerificationError
+const search = await client.search.get(event.data.id)
+```
+
+The URL must be public `https` on port 443. Events follow [Standard Webhooks](https://www.standardwebhooks.com); details at [osintverse.com/docs/api/search](https://osintverse.com/docs/api/search#webhooks).
+
 ## Agents
 
 Prefer MCP when your agent supports it: `https://osintverse.com/mcp` ([setup](https://osintverse.com/docs/mcp/setup)). The CLI and this library are for agents that work through a shell or code.

@@ -2,7 +2,7 @@ import { APIError, OSINTverseError, SearchNotCompletedError, toApiError, WaitTim
 import { TERMINAL_STATUSES, type BulkSearch, type InputType, type Provider, type Quote, type Search } from "./types.js"
 
 export const DEFAULT_BASE_URL = "https://apiv1.osintverse.com"
-export const VERSION = "0.2.1"
+export const VERSION = "0.3.0"
 const API_KEY_ENV = "OSINTVERSE_API_KEY"
 
 export type ClientOptions = {
@@ -128,6 +128,8 @@ export type CreateSearchParams = {
   premium?: boolean
   /** Sent as Idempotency-Key. Generated when omitted, so SDK retries never charge twice. */
   idempotencyKey?: string
+  /** https URL that gets a signed POST when the search settles. Verify with verifyWebhook. */
+  callbackUrl?: string
   /** Poll until terminal before returning. */
   wait?: boolean | WaitOptions
 }
@@ -137,11 +139,19 @@ export type BulkSearchParams = {
   queries: string[]
   providers: string[]
   premium?: boolean
+  /** One signed POST per job when it settles. */
+  callbackUrl?: string
   wait?: boolean | WaitOptions
 }
 
 class SearchResource {
   constructor(private readonly client: OSINTverse) {}
+
+  /** Secret for verifying callbackUrl events (one per wallet). Never charges. */
+  async webhookSecret(): Promise<string> {
+    const payload = await this.client.request<{ secret: string }>("GET", "/v1/webhooks/secret")
+    return payload.secret
+  }
 
   /** Price lookups and check the wallet. Never charges. */
   quote(params: { provider: string; inputType: InputType | string; premium?: boolean; count?: number }): Promise<Quote> {
@@ -163,6 +173,7 @@ class SearchResource {
         input_type: params.inputType,
         query: params.query,
         ...(params.premium ? { premium: true } : {}),
+        ...(params.callbackUrl ? { callback_url: params.callbackUrl } : {}),
       },
       headers: { "Idempotency-Key": params.idempotencyKey ?? newIdempotencyKey() },
     })
@@ -177,6 +188,7 @@ class SearchResource {
         queries: params.queries,
         providers: params.providers,
         ...(params.premium ? { premium: true } : {}),
+        ...(params.callbackUrl ? { callback_url: params.callbackUrl } : {}),
       },
       retry: false,
     })
